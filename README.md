@@ -5,6 +5,7 @@ Aplikasi persediaan sederhana dengan frontend HTML/CSS/JavaScript dan backend No
 ## Struktur
 
 ```text
+.gitignore
 frontend/
   index.html
   styles.css
@@ -12,6 +13,8 @@ frontend/
 backend/
   app.js
   schema.sql
+docs/
+  skema-persediaan.md
 README.md
 ```
 
