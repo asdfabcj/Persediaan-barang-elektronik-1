@@ -172,6 +172,16 @@ td:first-child { color: var(--ink); }
 .toast.is-error { background: #8b382d; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; clip-path: inset(50%); }
 
+body.public-readonly #product-open,
+body.public-readonly #movement-open,
+body.public-readonly [data-action],
+body.public-readonly #category-form,
+body.public-readonly #supplier-form,
+body.public-readonly .table-action,
+body.public-readonly dialog { display: none !important; }
+body.public-readonly #view-products th:last-child,
+body.public-readonly #view-products td:last-child { display: none; }
+
 @media (max-width: 1080px) {
   .sidebar { width: 205px; }
   .main-content { margin-left: 205px; }
