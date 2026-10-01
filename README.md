@@ -5,6 +5,7 @@ Aplikasi persediaan sederhana dengan frontend HTML/CSS/JavaScript dan backend No
 ## Struktur
 
 ```text
+index.html
 .gitignore
 frontend/
   index.html
@@ -13,6 +14,7 @@ frontend/
 backend/
   app.js
   schema.sql
+  public_readonly.sql
 docs/
   skema-persediaan.md
 README.md
@@ -50,7 +52,7 @@ Fungsi database `record_stock_movement` memperbarui saldo dan menyimpan riwayat 
 
 1. Buat proyek Supabase PostgreSQL.
 2. Buka **SQL Editor**, lalu jalankan isi [backend/schema.sql](backend/schema.sql).
-3. Dari proyek yang sama, salin **Project URL** melalui dialog **Connect**, dan salin key backend dari **Settings > API Keys**. Gunakan key **Secret** (`sb_secret_...`) atau legacy **service_role** (`eyJ...`), bukan `publishable`. Simpan key hanya di backend dan jangan bagikan.
+3. Dari proyek yang sama, salin **Project URL** melalui dialog **Connect**. Backend lokal menggunakan key **Secret** (`sb_secret_...`) atau legacy **service_role** (`eyJ...`). Key `publishable` hanya digunakan oleh frontend GitHub Pages dengan kebijakan baca-saja; jangan gunakan secret di frontend atau GitHub.
 
 ## Menjalankan aplikasi
 
@@ -64,6 +66,20 @@ node .\backend\app.js
 ```
 
 Jika Node terpasang di `D:\node.exe` dan perintah `node` belum dikenali, gunakan `D:\node.exe .\backend\app.js` pada baris terakhir. Buka `http://localhost:3000` di browser. URL dan key harus berasal dari proyek Supabase yang sama. Untuk menghentikan server, tekan `Ctrl+C` pada terminal.
+
+## Publikasi GitHub Pages (Baca Saja)
+
+GitHub Pages hanya menyajikan berkas frontend. Pada domain `github.io`, aplikasi membaca Supabase secara langsung dengan key `publishable`; penambahan dan perubahan data tetap dilakukan lewat backend lokal.
+
+> **Perhatian privasi:** setelah kebijakan baca-publik diaktifkan, siapa pun yang membuka situs dapat melihat nama barang, stok, harga satuan, nama pemasok, dan catatan mutasi. Jangan publikasikan data yang bersifat rahasia.
+
+1. Di proyek Supabase yang sama, buka **SQL Editor** dan jalankan isi [backend/public_readonly.sql](backend/public_readonly.sql). Skrip ini hanya memberi peran publik izin `SELECT` pada kolom yang diperlukan; tidak memberi izin menulis.
+2. Pastikan key `sb_publishable_...` di `frontend/app.js` adalah key publishable dari proyek tersebut. Key publishable memang dirancang untuk tampil di browser; jangan pernah menggantinya dengan `sb_secret_` atau `service_role`.
+3. Commit dan push berkas proyek ke GitHub.
+4. Di repositori GitHub, buka **Settings → Pages**. Pilih **Deploy from a branch**, pilih branch yang berisi berkas proyek, lalu pilih folder **/(root)** dan simpan.
+5. Buka alamat Pages yang diberikan GitHub, biasanya `https://<username>.github.io/<nama-repositori>/`. Beranda root akan meneruskan ke frontend.
+
+Situs Pages bersifat publik dan hanya-baca. Jangan menaruh secret Supabase di repository. `.gitignore` membantu mencegah file environment lokal ikut ter-commit.
 
 ## Alur awal
 
