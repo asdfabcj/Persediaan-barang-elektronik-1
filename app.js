@@ -8,6 +8,11 @@ const state = {
   activeView: "overview",
 };
 
+const IS_GITHUB_PAGES = location.hostname.endsWith(".github.io");
+const PUBLIC_SUPABASE_URL = "https://fekweyxkojyzdcuxdwvh.supabase.co";
+const PUBLIC_SUPABASE_KEY = "sb_publishable_H6JlKQeBNnHVf7LPJKRmhw_yDNTp34u";
+if (IS_GITHUB_PAGES) document.body.classList.add("public-readonly");
+
 const byId = (id) => document.getElementById(id);
 const rupiah = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
 const numberFormat = new Intl.NumberFormat("id-ID");
@@ -18,7 +23,63 @@ function escapeHtml(value) {
   })[character]);
 }
 
+async function publicSupabase(resource) {
+  const response = await fetch(`${PUBLIC_SUPABASE_URL}/rest/v1/${resource}`, {
+    headers: { apikey: PUBLIC_SUPABASE_KEY },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || "Supabase menolak permintaan baca publik.");
+  return data;
+}
+
+async function publicApi(path, options = {}) {
+  if (options.method && options.method.toUpperCase() !== "GET") {
+    throw new Error("Situs publik hanya menyediakan akses baca.");
+  }
+
+  const requestUrl = new URL(path, location.origin);
+  if (requestUrl.pathname === "/api/health") {
+    await publicSupabase("categories?select=id&limit=1");
+    return { connected: true };
+  }
+  if (requestUrl.pathname === "/api/overview") {
+    const since = encodeURIComponent(new Date(Date.now() - 30 * 86400000).toISOString());
+    const [products, movements] = await Promise.all([
+      publicSupabase("products?select=id,name,sku,stock_quantity,minimum_stock,unit,unit_cost"),
+      publicSupabase(`stock_movements?select=id&created_at=gte.${since}`),
+    ]);
+    const lowStock = products.filter((product) => product.stock_quantity <= product.minimum_stock);
+    return {
+      productCount: products.length,
+      lowStockCount: lowStock.length,
+      inventoryValue: products.reduce((total, product) => total + product.stock_quantity * Number(product.unit_cost), 0),
+      movementCount30d: movements.length,
+      lowStock: lowStock.sort((a, b) => a.stock_quantity - b.stock_quantity).slice(0, 6),
+    };
+  }
+  if (requestUrl.pathname === "/api/products") {
+    const query = new URLSearchParams({
+      select: "id,sku,name,category_id,supplier_id,unit,unit_cost,minimum_stock,stock_quantity,created_at,categories(name),suppliers(name)",
+      order: "name.asc",
+    });
+    const search = requestUrl.searchParams.get("search")?.trim();
+    if (search) query.set("or", `(name.ilike.*${search}*,sku.ilike.*${search}*)`);
+    return publicSupabase(`products?${query}`);
+  }
+  if (requestUrl.pathname === "/api/movements") {
+    return publicSupabase("stock_movements?select=id,movement_type,quantity,note,created_at,products(id,name,sku,unit)&order=created_at.desc&limit=100");
+  }
+  if (requestUrl.pathname === "/api/categories") {
+    return publicSupabase("categories?select=id,name&order=name.asc");
+  }
+  if (requestUrl.pathname === "/api/suppliers") {
+    return publicSupabase("suppliers?select=id,name&order=name.asc");
+  }
+  throw new Error("Endpoint publik tidak tersedia.");
+}
+
 async function api(path, options = {}) {
+  if (IS_GITHUB_PAGES) return publicApi(path, options);
   const response = await fetch(path, {
     ...options,
     headers: { "Content-Type": "application/json", ...options.headers },
@@ -43,7 +104,7 @@ function setConnectionStatus(status) {
   dot.classList.toggle("is-connected", status === "connected");
   dot.classList.toggle("is-error", status === "error");
   byId("connection-detail").textContent = status === "connected"
-    ? "Terhubung ke database"
+    ? IS_GITHUB_PAGES ? "Akses publik · baca saja" : "Terhubung ke database"
     : status === "error" ? "Belum terhubung" : "Memeriksa koneksi...";
 }
 
