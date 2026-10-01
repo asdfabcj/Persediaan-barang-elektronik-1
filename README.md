@@ -15,23 +15,33 @@ backend/
 README.md
 ```
 
-## ERD: 4 entitas
+## ERD | Peta Relasi Data
 
-```text
-categories 1 ─── n products n ─── 1 suppliers
-                         |
-                         1
-                         |
-                         n
-                  stock_movements
+> **CIRCUIT MAP / 04 ENTITAS / 03 RELASI**  
+> `products` menjadi simpul utama yang menghubungkan klasifikasi, pemasok, dan jejak pergerakan stok.
+
+```mermaid
+erDiagram
+  CATEGORIES ||--o{ PRODUCTS : "mengelompokkan"
+  SUPPLIERS ||--o{ PRODUCTS : "memasok"
+  PRODUCTS ||--o{ STOCK_MOVEMENTS : "memiliki riwayat"
 ```
 
-- `categories`: klasifikasi perlengkapan.
-- `suppliers`: data pemasok.
-- `products`: katalog, harga, stok berjalan, dan batas minimum.
-- `stock_movements`: catatan barang masuk atau keluar.
+| Entitas | Primary key | Foreign key dan aturan penting | Fungsi |
+| --- | --- | --- | --- |
+| `categories` | `id` (`uuid`) | `name` wajib dan unik. | Mengelompokkan jenis perlengkapan. |
+| `suppliers` | `id` (`uuid`) | `name` wajib dan unik. | Menyimpan identitas serta kontak pemasok. |
+| `products` | `id` (`uuid`) | `category_id` → `categories.id`; `supplier_id` → `suppliers.id`; `sku` unik. | Menyimpan katalog, harga, saldo stok, dan batas minimum. |
+| `stock_movements` | `id` (`uuid`) | `product_id` → `products.id`; jenis `in`/`out`; jumlah positif. | Menyimpan riwayat perubahan stok. |
 
-Jumlah stok diperbarui bersama catatan mutasi dalam satu transaksi database. Stok keluar yang melebihi stok tersedia akan ditolak.
+### Cara Membaca Relasi
+
+- **Kategori → Barang (1:N):** satu kategori dapat berisi banyak barang; setiap barang wajib memiliki satu kategori.
+- **Pemasok → Barang (1:N):** satu pemasok dapat memasok banyak barang; setiap barang wajib memiliki satu pemasok.
+- **Barang → Mutasi (1:N):** satu barang dapat memiliki banyak catatan mutasi; setiap catatan mutasi mengacu pada satu barang.
+- Kategori dan pemasok tidak terhubung langsung. `products` menjadi penghubungnya.
+
+Fungsi database `record_stock_movement` memperbarui saldo dan menyimpan riwayat dalam satu transaksi. Mutasi keluar ditolak jika jumlahnya melebihi stok yang tersedia. [Lihat dokumentasi skema lengkap](docs/skema-persediaan.md).
 
 ## Menyiapkan Supabase
 
