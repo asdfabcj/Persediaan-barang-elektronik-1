@@ -11,7 +11,6 @@ const state = {
 const IS_GITHUB_PAGES = location.hostname.endsWith(".github.io");
 const PUBLIC_SUPABASE_URL = "https://fekweyxkojyzdcuxdwvh.supabase.co";
 const PUBLIC_SUPABASE_KEY = "sb_publishable_H6JlKQeBNnHVf7LPJKRmhw_yDNTp34u";
-if (IS_GITHUB_PAGES) document.body.classList.add("public-readonly");
 
 const byId = (id) => document.getElementById(id);
 const rupiah = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
@@ -23,21 +22,29 @@ function escapeHtml(value) {
   })[character]);
 }
 
-async function publicSupabase(resource) {
+async function publicSupabase(resource, options = {}) {
   const response = await fetch(`${PUBLIC_SUPABASE_URL}/rest/v1/${resource}`, {
-    headers: { apikey: PUBLIC_SUPABASE_KEY },
+    ...options,
+    headers: {
+      apikey: PUBLIC_SUPABASE_KEY,
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || "Supabase menolak permintaan baca publik.");
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+  if (!response.ok) throw new Error(data?.message || "Supabase menolak permintaan publik.");
   return data;
 }
 
 async function publicApi(path, options = {}) {
-  if (options.method && options.method.toUpperCase() !== "GET") {
-    throw new Error("Situs publik hanya menyediakan akses baca.");
-  }
-
   const requestUrl = new URL(path, location.origin);
+  const method = (options.method || "GET").toUpperCase();
   if (requestUrl.pathname === "/api/health") {
     await publicSupabase("categories?select=id&limit=1");
     return { connected: true };
@@ -58,6 +65,13 @@ async function publicApi(path, options = {}) {
     };
   }
   if (requestUrl.pathname === "/api/products") {
+    if (method === "POST") {
+      return publicSupabase("products?select=*", {
+        method,
+        headers: { Prefer: "return=representation" },
+        body: options.body,
+      });
+    }
     const query = new URLSearchParams({
       select: "id,sku,name,category_id,supplier_id,unit,unit_cost,minimum_stock,stock_quantity,created_at,categories(name),suppliers(name)",
       order: "name.asc",
@@ -66,13 +80,48 @@ async function publicApi(path, options = {}) {
     if (search) query.set("or", `(name.ilike.*${search}*,sku.ilike.*${search}*)`);
     return publicSupabase(`products?${query}`);
   }
+  const productMatch = requestUrl.pathname.match(/^\/api\/products\/([^/]+)$/);
+  if (productMatch && method === "PATCH") {
+    return publicSupabase(`products?id=eq.${encodeURIComponent(productMatch[1])}&select=*`, {
+      method,
+      headers: { Prefer: "return=representation" },
+      body: options.body,
+    });
+  }
   if (requestUrl.pathname === "/api/movements") {
+    if (method === "POST") {
+      const payload = JSON.parse(options.body || "{}");
+      return publicSupabase("rpc/record_stock_movement", {
+        method,
+        body: JSON.stringify({
+          p_product_id: payload.product_id,
+          p_movement_type: payload.movement_type,
+          p_quantity: payload.quantity,
+          p_note: payload.note || null,
+        }),
+      });
+    }
     return publicSupabase("stock_movements?select=id,movement_type,quantity,note,created_at,products(id,name,sku,unit)&order=created_at.desc&limit=100");
   }
   if (requestUrl.pathname === "/api/categories") {
+    if (method === "POST") {
+      const payload = JSON.parse(options.body || "{}");
+      return publicSupabase("categories?select=*", {
+        method,
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ name: payload.name }),
+      });
+    }
     return publicSupabase("categories?select=id,name&order=name.asc");
   }
   if (requestUrl.pathname === "/api/suppliers") {
+    if (method === "POST") {
+      return publicSupabase("suppliers?select=*", {
+        method,
+        headers: { Prefer: "return=representation" },
+        body: options.body,
+      });
+    }
     return publicSupabase("suppliers?select=id,name&order=name.asc");
   }
   throw new Error("Endpoint publik tidak tersedia.");
@@ -104,7 +153,7 @@ function setConnectionStatus(status) {
   dot.classList.toggle("is-connected", status === "connected");
   dot.classList.toggle("is-error", status === "error");
   byId("connection-detail").textContent = status === "connected"
-    ? IS_GITHUB_PAGES ? "Akses publik · baca saja" : "Terhubung ke database"
+    ? IS_GITHUB_PAGES ? "Akses publik · dapat mengubah data" : "Terhubung ke database"
     : status === "error" ? "Belum terhubung" : "Memeriksa koneksi...";
 }
 
