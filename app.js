@@ -1,410 +1,279 @@
-const state = {
-  overview: null,
-  products: [],
-  movements: [],
-  categories: [],
-  suppliers: [],
-  editingProductId: null,
-  activeView: "overview",
+const http = require("node:http");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+
+const PORT = Number(process.env.PORT || 3000);
+const SUPABASE_URL = (process.env.SUPABASE_URL || "https://fekweyxkojyzdcuxdwvh.supabase.co").replace(/\/$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const FRONTEND_DIR = path.resolve(__dirname, "../frontend");
+
+const mimeTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
 };
 
-const IS_GITHUB_PAGES = location.hostname.endsWith(".github.io");
-const PUBLIC_SUPABASE_URL = "https://fekweyxkojyzdcuxdwvh.supabase.co";
-const PUBLIC_SUPABASE_KEY = "sb_publishable_H6JlKQeBNnHVf7LPJKRmhw_yDNTp34u";
-
-const byId = (id) => document.getElementById(id);
-const rupiah = new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 });
-const numberFormat = new Intl.NumberFormat("id-ID");
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[character]);
+function sendJson(response, statusCode, data) {
+  response.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+  response.end(data === null ? "null" : JSON.stringify(data));
 }
 
-async function publicSupabase(resource, options = {}) {
-  const response = await fetch(`${PUBLIC_SUPABASE_URL}/rest/v1/${resource}`, {
+function describeSupabaseKey() {
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_secret_")) return "sb_secret";
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_publishable_")) return "sb_publishable";
+  if (SUPABASE_SERVICE_ROLE_KEY.startsWith("eyJ")) {
+    try {
+      const payload = JSON.parse(Buffer.from(SUPABASE_SERVICE_ROLE_KEY.split(".")[1], "base64url").toString("utf8"));
+      return `legacy:${payload.role || "unknown"}${payload.ref ? `:${payload.ref}` : ""}`;
+    } catch {
+      return "legacy:invalid";
+    }
+  }
+  return SUPABASE_SERVICE_ROLE_KEY ? "unknown" : "missing";
+}
+
+async function readJson(request) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 1_000_000) {
+      const error = new Error("Ukuran permintaan terlalu besar.");
+      error.status = 413;
+      throw error;
+    }
+  }
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    const error = new Error("Format JSON tidak valid.");
+    error.status = 400;
+    throw error;
+  }
+}
+
+async function supabase(resource, options = {}) {
+  const isSecretApiKey = SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_secret_");
+  const isLegacyServiceKey = SUPABASE_SERVICE_ROLE_KEY.startsWith("eyJ");
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_publishable_") || (!isSecretApiKey && !isLegacyServiceKey)) {
+    const message = SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_publishable_")
+      ? "Key publishable tidak dapat digunakan oleh backend ini. Gunakan key secret/service_role di environment server."
+      : !SUPABASE_URL
+        ? "Atur SUPABASE_URL ke Project URL Supabase Anda di environment server."
+        : !SUPABASE_SERVICE_ROLE_KEY
+          ? "Atur SUPABASE_SERVICE_ROLE_KEY dengan key secret/service_role di environment server."
+          : "Format key tidak dikenali. Masukkan seluruh key yang berawalan sb_secret_ atau eyJ.";
+    const error = new Error(message);
+    error.status = 503;
+    throw error;
+  }
+
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${resource}`, {
     ...options,
     headers: {
-      apikey: PUBLIC_SUPABASE_KEY,
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      ...(isSecretApiKey ? {} : { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` }),
+      "Content-Type": "application/json",
       ...options.headers,
     },
   });
   const text = await response.text();
-  let data = null;
+  let result = null;
   try {
-    data = text ? JSON.parse(text) : null;
+    result = text ? JSON.parse(text) : null;
   } catch {
-    data = null;
+    result = null;
   }
-  if (!response.ok) throw new Error(data?.message || "Supabase menolak permintaan publik.");
-  return data;
+  if (!response.ok) {
+    const error = new Error(result?.message || "Permintaan ke Supabase gagal.");
+    error.status = response.status;
+    throw error;
+  }
+  return result;
 }
 
-async function publicApi(path, options = {}) {
-  const requestUrl = new URL(path, location.origin);
-  const method = (options.method || "GET").toUpperCase();
-  if (requestUrl.pathname === "/api/health") {
-    await publicSupabase("categories?select=id&limit=1");
-    return { connected: true };
+async function handleApi(request, response, url) {
+  const method = request.method;
+  const pathname = url.pathname;
+
+  if (pathname === "/api/health" && method === "GET") {
+    try {
+      await supabase("categories?select=id&limit=1");
+      return sendJson(response, 200, { connected: true });
+    } catch (error) {
+      return sendJson(response, 502, {
+        connected: false,
+        error: error.message,
+        projectHost: new URL(SUPABASE_URL).host,
+        keyType: describeSupabaseKey(),
+      });
+    }
   }
-  if (requestUrl.pathname === "/api/overview") {
+
+  if (pathname === "/api/overview" && method === "GET") {
+    const products = await supabase("products?select=id,name,sku,stock_quantity,minimum_stock,unit,unit_cost");
     const since = encodeURIComponent(new Date(Date.now() - 30 * 86400000).toISOString());
-    const [products, movements] = await Promise.all([
-      publicSupabase("products?select=id,name,sku,stock_quantity,minimum_stock,unit,unit_cost"),
-      publicSupabase(`stock_movements?select=id&created_at=gte.${since}`),
-    ]);
+    const movements = await supabase(`stock_movements?select=id&created_at=gte.${since}`);
     const lowStock = products.filter((product) => product.stock_quantity <= product.minimum_stock);
-    return {
+    return sendJson(response, 200, {
       productCount: products.length,
       lowStockCount: lowStock.length,
       inventoryValue: products.reduce((total, product) => total + product.stock_quantity * Number(product.unit_cost), 0),
       movementCount30d: movements.length,
       lowStock: lowStock.sort((a, b) => a.stock_quantity - b.stock_quantity).slice(0, 6),
-    };
+    });
   }
-  if (requestUrl.pathname === "/api/products") {
-    if (method === "POST") {
-      return publicSupabase("products?select=*", {
-        method,
-        headers: { Prefer: "return=representation" },
-        body: options.body,
-      });
-    }
+
+  if (pathname === "/api/products" && method === "GET") {
+    const search = url.searchParams.get("search")?.trim();
     const query = new URLSearchParams({
       select: "id,sku,name,category_id,supplier_id,unit,unit_cost,minimum_stock,stock_quantity,created_at,categories(name),suppliers(name)",
       order: "name.asc",
     });
-    const search = requestUrl.searchParams.get("search")?.trim();
     if (search) query.set("or", `(name.ilike.*${search}*,sku.ilike.*${search}*)`);
-    return publicSupabase(`products?${query}`);
+    return sendJson(response, 200, await supabase(`products?${query}`));
   }
-  const productMatch = requestUrl.pathname.match(/^\/api\/products\/([^/]+)$/);
-  if (productMatch && method === "PATCH") {
-    return publicSupabase(`products?id=eq.${encodeURIComponent(productMatch[1])}&select=*`, {
-      method,
+
+  if (pathname === "/api/products" && method === "POST") {
+    const body = await readJson(request);
+    if (!body.sku?.trim() || !body.name?.trim() || !body.category_id || !body.supplier_id) {
+      return sendJson(response, 400, { error: "Kode, nama, kategori, dan pemasok wajib diisi." });
+    }
+    const product = {
+      sku: body.sku.trim(),
+      name: body.name.trim(),
+      category_id: body.category_id,
+      supplier_id: body.supplier_id,
+      unit: body.unit?.trim() || "unit",
+      unit_cost: Number(body.unit_cost || 0),
+      minimum_stock: Number(body.minimum_stock || 0),
+    };
+    if (!Number.isFinite(product.unit_cost) || product.unit_cost < 0 || !Number.isInteger(product.minimum_stock) || product.minimum_stock < 0) {
+      return sendJson(response, 400, { error: "Harga dan batas minimum harus berupa angka yang valid." });
+    }
+    const created = await supabase("products?select=*", {
+      method: "POST",
       headers: { Prefer: "return=representation" },
-      body: options.body,
+      body: JSON.stringify(product),
     });
+    return sendJson(response, 201, created[0]);
   }
-  if (requestUrl.pathname === "/api/movements") {
-    if (method === "POST") {
-      const payload = JSON.parse(options.body || "{}");
-      return publicSupabase("rpc/record_stock_movement", {
-        method,
-        body: JSON.stringify({
-          p_product_id: payload.product_id,
-          p_movement_type: payload.movement_type,
-          p_quantity: payload.quantity,
-          p_note: payload.note || null,
-        }),
-      });
+
+  const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
+  if (productMatch && method === "PATCH") {
+    const body = await readJson(request);
+    const allowed = ["sku", "name", "category_id", "supplier_id", "unit", "unit_cost", "minimum_stock"];
+    const update = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
+    if ("unit_cost" in update) update.unit_cost = Number(update.unit_cost);
+    if ("minimum_stock" in update) update.minimum_stock = Number(update.minimum_stock);
+    if (("unit_cost" in update && (!Number.isFinite(update.unit_cost) || update.unit_cost < 0)) ||
+        ("minimum_stock" in update && (!Number.isInteger(update.minimum_stock) || update.minimum_stock < 0))) {
+      return sendJson(response, 400, { error: "Harga dan batas minimum harus berupa angka yang valid." });
     }
-    return publicSupabase("stock_movements?select=id,movement_type,quantity,note,created_at,products(id,name,sku,unit)&order=created_at.desc&limit=100");
-  }
-  if (requestUrl.pathname === "/api/categories") {
-    if (method === "POST") {
-      const payload = JSON.parse(options.body || "{}");
-      return publicSupabase("categories?select=*", {
-        method,
-        headers: { Prefer: "return=representation" },
-        body: JSON.stringify({ name: payload.name }),
-      });
-    }
-    return publicSupabase("categories?select=id,name&order=name.asc");
-  }
-  if (requestUrl.pathname === "/api/suppliers") {
-    if (method === "POST") {
-      return publicSupabase("suppliers?select=*", {
-        method,
-        headers: { Prefer: "return=representation" },
-        body: options.body,
-      });
-    }
-    return publicSupabase("suppliers?select=id,name&order=name.asc");
-  }
-  throw new Error("Endpoint publik tidak tersedia.");
-}
-
-async function api(path, options = {}) {
-  if (IS_GITHUB_PAGES) return publicApi(path, options);
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Permintaan gagal. Coba lagi.");
-  return data;
-}
-
-let toastTimer;
-function showToast(message, isError = false) {
-  const toast = byId("toast");
-  toast.textContent = message;
-  toast.classList.toggle("is-error", isError);
-  toast.classList.add("is-visible");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 3600);
-}
-
-function setConnectionStatus(status) {
-  const dot = byId("connection-dot");
-  dot.classList.toggle("is-connected", status === "connected");
-  dot.classList.toggle("is-error", status === "error");
-  byId("connection-detail").textContent = status === "connected"
-    ? IS_GITHUB_PAGES ? "Akses publik · dapat mengubah data" : "Terhubung ke database"
-    : status === "error" ? "Belum terhubung" : "Memeriksa koneksi...";
-}
-
-function relationName(value) {
-  return Array.isArray(value) ? value[0]?.name : value?.name;
-}
-
-function stockStatus(product) {
-  if (product.stock_quantity <= 0) return '<span class="status status-empty">Habis</span>';
-  if (product.stock_quantity <= product.minimum_stock) return '<span class="status status-low">Menipis</span>';
-  return '<span class="status status-ok">Tersedia</span>';
-}
-
-function productNameCell(product) {
-  return `<span class="item-name">${escapeHtml(product.name)}</span><span class="item-code">${escapeHtml(product.sku)}</span>`;
-}
-
-function renderOverview() {
-  const overview = state.overview;
-  byId("metric-products").textContent = numberFormat.format(overview.productCount);
-  byId("metric-low").textContent = numberFormat.format(overview.lowStockCount);
-  byId("metric-value").textContent = rupiah.format(overview.inventoryValue);
-  byId("metric-movements").textContent = numberFormat.format(overview.movementCount30d);
-  byId("low-stock-count").textContent = `${numberFormat.format(overview.lowStockCount)} item`;
-
-  const lowStockBody = byId("low-stock-body");
-  lowStockBody.innerHTML = overview.lowStock.map((product) => `
-    <tr>
-      <td>${productNameCell(product)}</td>
-      <td><span class="stock-value is-low">${numberFormat.format(product.stock_quantity)} ${escapeHtml(product.unit)}</span></td>
-      <td>${numberFormat.format(product.minimum_stock)} ${escapeHtml(product.unit)}</td>
-      <td>${stockStatus(product)}</td>
-    </tr>`).join("");
-  byId("low-stock-empty").hidden = overview.lowStock.length > 0;
-
-  const recent = state.movements.slice(0, 5);
-  byId("recent-movements").innerHTML = recent.map((movement) => {
-    const outgoing = movement.movement_type === "out";
-    const product = Array.isArray(movement.products) ? movement.products[0] : movement.products;
-    return `<div class="activity-row">
-      <span class="activity-icon ${outgoing ? "out" : ""}">${outgoing ? "↑" : "↓"}</span>
-      <span class="activity-copy"><strong>${escapeHtml(product?.name || "Barang")}</strong><small>${formatDate(movement.created_at)}${movement.note ? ` · ${escapeHtml(movement.note)}` : ""}</small></span>
-      <span class="activity-quantity ${outgoing ? "out" : ""}">${outgoing ? "−" : "+"}${numberFormat.format(movement.quantity)}</span>
-    </div>`;
-  }).join("");
-  byId("activity-empty").hidden = recent.length > 0;
-}
-
-function renderProducts(products = state.products) {
-  byId("product-count").textContent = `${numberFormat.format(products.length)} barang`;
-  byId("products-body").innerHTML = products.map((product) => `
-    <tr>
-      <td>${productNameCell(product)}</td>
-      <td>${escapeHtml(relationName(product.categories) || "—")}</td>
-      <td>${escapeHtml(relationName(product.suppliers) || "—")}</td>
-      <td><span class="stock-value ${product.stock_quantity <= product.minimum_stock ? "is-low" : ""}">${numberFormat.format(product.stock_quantity)} ${escapeHtml(product.unit)}</span></td>
-      <td>${rupiah.format(product.unit_cost)}</td>
-      <td>${stockStatus(product)}</td>
-      <td><button class="table-action" type="button" data-edit-product="${escapeHtml(product.id)}">Ubah</button></td>
-    </tr>`).join("");
-  byId("products-empty").hidden = products.length > 0;
-}
-
-function renderMovements() {
-  const body = byId("movements-body");
-  body.innerHTML = state.movements.map((movement) => {
-    const outgoing = movement.movement_type === "out";
-    const product = Array.isArray(movement.products) ? movement.products[0] : movement.products;
-    return `<tr>
-      <td>${formatDate(movement.created_at, true)}</td>
-      <td>${product ? productNameCell(product) : "—"}</td>
-      <td><span class="status ${outgoing ? "status-low" : "status-ok"}">${outgoing ? "Keluar" : "Masuk"}</span></td>
-      <td><strong>${outgoing ? "−" : "+"}${numberFormat.format(movement.quantity)}</strong>${product?.unit ? ` ${escapeHtml(product.unit)}` : ""}</td>
-      <td>${escapeHtml(movement.note || "—")}</td>
-    </tr>`;
-  }).join("");
-  byId("movements-empty").hidden = state.movements.length > 0;
-}
-
-function renderMasters() {
-  byId("category-count").textContent = numberFormat.format(state.categories.length);
-  byId("supplier-count").textContent = numberFormat.format(state.suppliers.length);
-  byId("category-list").innerHTML = state.categories.map((category) => `<li><span>${escapeHtml(category.name)}</span><small>${numberFormat.format(state.products.filter((product) => product.category_id === category.id).length)} barang</small></li>`).join("");
-  byId("supplier-list").innerHTML = state.suppliers.map((supplier) => `<li><span>${escapeHtml(supplier.name)}<small>${supplier.contact_name ? ` · ${escapeHtml(supplier.contact_name)}` : ""}</small></span><small>${escapeHtml(supplier.phone || supplier.email || "")}</small></li>`).join("");
-  fillSelect(byId("product-form").elements.category_id, state.categories, "Pilih kategori");
-  fillSelect(byId("product-form").elements.supplier_id, state.suppliers, "Pilih pemasok");
-  fillSelect(byId("movement-form").elements.product_id, state.products, "Pilih barang", (product) => `${product.name} · ${product.sku} (${product.stock_quantity} ${product.unit})`);
-}
-
-function fillSelect(select, items, placeholder, label = (item) => item.name) {
-  const selected = select.value;
-  select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>${items.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(label(item))}</option>`).join("")}`;
-  if (items.some((item) => item.id === selected)) select.value = selected;
-}
-
-function formatDate(value, includeTime = false) {
-  const options = includeTime
-    ? { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }
-    : { day: "2-digit", month: "short" };
-  return new Intl.DateTimeFormat("id-ID", options).format(new Date(value));
-}
-
-async function refreshData() {
-  setConnectionStatus("checking");
-  try {
-    const [health, overview, products, movements, categories, suppliers] = await Promise.all([
-      api("/api/health"),
-      api("/api/overview"),
-      api("/api/products"),
-      api("/api/movements"),
-      api("/api/categories"),
-      api("/api/suppliers"),
-    ]);
-    Object.assign(state, { overview, products, movements, categories, suppliers });
-    renderOverview();
-    renderProducts();
-    renderMovements();
-    renderMasters();
-    setConnectionStatus(health.connected ? "connected" : "error");
-  } catch (error) {
-    setConnectionStatus("error");
-    showToast(error.message, true);
-  }
-}
-
-function setView(view) {
-  state.activeView = view;
-  document.querySelectorAll(".view").forEach((section) => {
-    const active = section.id === `view-${view}`;
-    section.hidden = !active;
-    section.classList.toggle("is-visible", active);
-  });
-  document.querySelectorAll("[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === view && button.classList.contains("nav-item")));
-  byId("current-section").textContent = ({ overview: "Ringkasan", products: "Perlengkapan", movements: "Mutasi stok", masters: "Data referensi" })[view];
-}
-
-function openProductDialog(product = null) {
-  const form = byId("product-form");
-  form.reset();
-  state.editingProductId = product?.id || null;
-  byId("product-dialog").querySelector(".modal-heading h2").textContent = product ? "Ubah barang" : "Tambah barang";
-  form.querySelector('[name="sku"]').value = product?.sku || "";
-  form.querySelector('[name="name"]').value = product?.name || "";
-  form.querySelector('[name="unit"]').value = product?.unit || "unit";
-  form.querySelector('[name="unit_cost"]').value = product?.unit_cost ?? 0;
-  form.querySelector('[name="minimum_stock"]').value = product?.minimum_stock ?? 5;
-  form.querySelector('button[type="submit"]').textContent = product ? "Simpan perubahan" : "Simpan barang";
-  fillSelect(form.elements.category_id, state.categories, "Pilih kategori");
-  fillSelect(form.elements.supplier_id, state.suppliers, "Pilih pemasok");
-  if (product) {
-    form.elements.category_id.value = product.category_id;
-    form.elements.supplier_id.value = product.supplier_id;
-  }
-  byId("product-dialog").showModal();
-}
-
-function openMovementDialog() {
-  const form = byId("movement-form");
-  form.reset();
-  fillSelect(form.elements.product_id, state.products, "Pilih barang", (product) => `${product.name} · ${product.sku} (${product.stock_quantity} ${product.unit})`);
-  byId("movement-dialog").showModal();
-}
-
-document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.view)));
-document.querySelectorAll('[data-action="add-product"]').forEach((button) => button.addEventListener("click", () => openProductDialog()));
-document.querySelectorAll('[data-action="add-movement"]').forEach((button) => button.addEventListener("click", openMovementDialog));
-byId("product-open").addEventListener("click", () => openProductDialog());
-byId("movement-open").addEventListener("click", openMovementDialog);
-document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => byId(button.dataset.close).close()));
-
-byId("products-body").addEventListener("click", (event) => {
-  const button = event.target.closest("[data-edit-product]");
-  if (!button) return;
-  const product = state.products.find((item) => item.id === button.dataset.editProduct);
-  if (product) openProductDialog(product);
-});
-
-byId("product-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const payload = Object.fromEntries(new FormData(form));
-  payload.unit_cost = Number(payload.unit_cost);
-  payload.minimum_stock = Number(payload.minimum_stock);
-  try {
-    await api(state.editingProductId ? `/api/products/${encodeURIComponent(state.editingProductId)}` : "/api/products", {
-      method: state.editingProductId ? "PATCH" : "POST",
-      body: JSON.stringify(payload),
+    const updated = await supabase(`products?id=eq.${encodeURIComponent(productMatch[1])}&select=*`, {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify(update),
     });
-    byId("product-dialog").close();
-    showToast(state.editingProductId ? "Perubahan barang tersimpan." : "Barang berhasil ditambahkan.");
-    state.editingProductId = null;
-    await refreshData();
-  } catch (error) {
-    showToast(error.message, true);
+    return updated.length ? sendJson(response, 200, updated[0]) : sendJson(response, 404, { error: "Barang tidak ditemukan." });
   }
-});
 
-byId("movement-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const payload = Object.fromEntries(new FormData(event.currentTarget));
-  payload.quantity = Number(payload.quantity);
-  try {
-    await api("/api/movements", { method: "POST", body: JSON.stringify(payload) });
-    byId("movement-dialog").close();
-    showToast("Mutasi stok berhasil dicatat.");
-    await refreshData();
-  } catch (error) {
-    showToast(error.message, true);
+  if (pathname === "/api/movements" && method === "GET") {
+    const movements = await supabase("stock_movements?select=id,movement_type,quantity,note,created_at,products(id,name,sku,unit)&order=created_at.desc&limit=100");
+    return sendJson(response, 200, movements);
   }
-});
 
-byId("category-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const name = new FormData(form).get("name");
-  try {
-    await api("/api/categories", { method: "POST", body: JSON.stringify({ name }) });
-    form.reset();
-    showToast("Kategori berhasil ditambahkan.");
-    await refreshData();
-  } catch (error) {
-    showToast(error.message, true);
-  }
-});
-
-byId("supplier-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const payload = Object.fromEntries(new FormData(form));
-  try {
-    await api("/api/suppliers", { method: "POST", body: JSON.stringify(payload) });
-    form.reset();
-    showToast("Pemasok berhasil ditambahkan.");
-    await refreshData();
-  } catch (error) {
-    showToast(error.message, true);
-  }
-});
-
-let searchTimer;
-byId("product-search").addEventListener("input", (event) => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    const search = event.target.value.trim();
-    try {
-      renderProducts(search ? await api(`/api/products?search=${encodeURIComponent(search)}`) : state.products);
-    } catch (error) {
-      showToast(error.message, true);
+  if (pathname === "/api/movements" && method === "POST") {
+    const body = await readJson(request);
+    const quantity = Number(body.quantity);
+    if (!body.product_id || !["in", "out"].includes(body.movement_type) || !Number.isInteger(quantity) || quantity <= 0) {
+      return sendJson(response, 400, { error: "Barang, jenis mutasi, dan jumlah positif wajib diisi." });
     }
-  }, 220);
+    const movement = await supabase("rpc/record_stock_movement", {
+      method: "POST",
+      body: JSON.stringify({
+        p_product_id: body.product_id,
+        p_movement_type: body.movement_type,
+        p_quantity: quantity,
+        p_note: body.note?.trim() || null,
+      }),
+    });
+    return sendJson(response, 201, { id: movement });
+  }
+
+  if (pathname === "/api/categories" && method === "GET") {
+    return sendJson(response, 200, await supabase("categories?select=id,name,description&order=name.asc"));
+  }
+
+  if (pathname === "/api/categories" && method === "POST") {
+    const body = await readJson(request);
+    if (!body.name?.trim()) return sendJson(response, 400, { error: "Nama kategori wajib diisi." });
+    const created = await supabase("categories?select=*", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({ name: body.name.trim(), description: body.description?.trim() || null }),
+    });
+    return sendJson(response, 201, created[0]);
+  }
+
+  if (pathname === "/api/suppliers" && method === "GET") {
+    return sendJson(response, 200, await supabase("suppliers?select=id,name,contact_name,phone,email&order=name.asc"));
+  }
+
+  if (pathname === "/api/suppliers" && method === "POST") {
+    const body = await readJson(request);
+    if (!body.name?.trim()) return sendJson(response, 400, { error: "Nama pemasok wajib diisi." });
+    const created = await supabase("suppliers?select=*", {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        name: body.name.trim(),
+        contact_name: body.contact_name?.trim() || null,
+        phone: body.phone?.trim() || null,
+        email: body.email?.trim() || null,
+      }),
+    });
+    return sendJson(response, 201, created[0]);
+  }
+
+  return sendJson(response, 404, { error: "Endpoint tidak ditemukan." });
+}
+
+async function serveFrontend(response, pathname) {
+  const decodedPath = decodeURIComponent(pathname);
+  const relativePath = decodedPath === "/" ? "index.html" : decodedPath.replace(/^[/\\]+/, "");
+  const filePath = path.resolve(FRONTEND_DIR, relativePath);
+  if (!filePath.startsWith(`${FRONTEND_DIR}${path.sep}`)) {
+    response.writeHead(403);
+    return response.end("Forbidden");
+  }
+  try {
+    const content = await fs.readFile(filePath);
+    response.writeHead(200, { "Content-Type": mimeTypes[path.extname(filePath)] || "application/octet-stream" });
+    response.end(content);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("File tidak ditemukan.");
+  }
+}
+
+const server = http.createServer(async (request, response) => {
+  const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  try {
+    if (url.pathname.startsWith("/api/")) {
+      await handleApi(request, response, url);
+    } else if (request.method === "GET") {
+      await serveFrontend(response, url.pathname);
+    } else {
+      sendJson(response, 405, { error: "Metode tidak didukung." });
+    }
+  } catch (error) {
+    const status = Number.isInteger(error.status) ? error.status : 500;
+    if (status >= 500) console.error(error);
+    const message = error.cause?.message ? `${error.message}: ${error.cause.message}` : error.message;
+    sendJson(response, status, { error: message || "Server gagal memproses permintaan." });
+  }
 });
 
-byId("today-label").textContent = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(new Date());
-refreshData();
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`Inventaris berjalan di http://localhost:${PORT}`);
+});
