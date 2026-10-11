@@ -26,5 +26,9 @@ CREATE POLICY public_full_stock_movements ON public.stock_movements
 
 GRANT EXECUTE ON FUNCTION public.record_stock_movement(uuid, text, integer, text)
   TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.update_stock_movement(uuid, uuid, text, integer, text)
+  TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.delete_stock_movement(uuid)
+  TO anon, authenticated;
 
 COMMIT;
