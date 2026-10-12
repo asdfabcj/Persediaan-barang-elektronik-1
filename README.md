@@ -1,4 +1,4 @@
-# CatZao - Sistem Persediaan Perlengkapan Elektronik
+# CatZap - Sistem Persediaan Perlengkapan Elektronik
 
 Sistem informasi persediaan barang-barang elektronik, dapat menunjukkan nominal dan jumlah persediaan.[cite: 2].
 
