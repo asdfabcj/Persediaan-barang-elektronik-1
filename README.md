@@ -1,6 +1,6 @@
 # CatZap - Sistem Persediaan Perlengkapan Elektronik
 
-Sistem informasi persediaan barang-barang elektronik, dapat menunjukkan nominal dan jumlah persediaan.[cite: 2].
+Sistem informasi persediaan barang-barang elektronik, dapat menunjukkan nominal dan jumlah persediaan.
 
 Rancangan website: [Lihat_Isi_CatZap](https://catherineazr.github.io/CatZapStorage/)
 
@@ -8,13 +8,13 @@ Rancangan website: [Lihat_Isi_CatZap](https://catherineazr.github.io/CatZapStora
 
 | Keterangan | Detail |
 | :--- | :--- |
-| Nama | Catherine Azriel Manurung [cite: 2] |
-| NIM | 12030124140208[cite: 2] |
-| Mata Kuliah | Pengkodean dan Pemrograman[cite: 2] |
-| Kelas | D[cite: 2] |
-| Dosen Pengampu | Dr. Totok Dewayanto, S.E., M.Si., Akt.[cite: 2] |
+| Nama | Catherine Azriel Manurung |
+| NIM | 12030124140208 |
+| Mata Kuliah | Pengkodean dan Pemrograman |
+| Kelas | D |
+| Dosen Pengampu | Dr. Totok Dewayanto, S.E., M.Si., Akt. |
 
-Disusun untuk memenuhi UTS Pengkodean dan Pemrograman dalam bentuk projek.[cite: 2]
+Disusun untuk memenuhi UTS Pengkodean dan Pemrograman dalam bentuk projek.
 
 Aplikasi persediaan sederhana dengan frontend HTML/CSS/JavaScript dan backend Node.js tanpa paket tambahan. Data disimpan di Supabase PostgreSQL.
 
