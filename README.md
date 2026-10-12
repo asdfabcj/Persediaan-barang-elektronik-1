@@ -1,4 +1,20 @@
-# Rakit - Sistem Persediaan Perlengkapan Elektronik
+# CatZao - Sistem Persediaan Perlengkapan Elektronik
+
+Sistem informasi persediaan barang-barang elektronik, dapat menunjukkan nominal dan jumlah persediaan.[cite: 2].
+
+Rancangan website: [Lihat_Isi_CatZap](https://catherineazr.github.io/CatZapStorage/)
+
+## Identitas tugas
+
+| Keterangan | Detail |
+| :--- | :--- |
+| Nama | Catherine Azriel Manurung [cite: 2] |
+| NIM | 12030124140208[cite: 2] |
+| Mata Kuliah | Pengkodean dan Pemrograman[cite: 2] |
+| Kelas | D[cite: 2] |
+| Dosen Pengampu | Dr. Totok Dewayanto, S.E., M.Si., Akt.[cite: 2] |
+
+Disusun untuk memenuhi UTS Pengkodean dan Pemrograman dalam bentuk projek.[cite: 2]
 
 Aplikasi persediaan sederhana dengan frontend HTML/CSS/JavaScript dan backend Node.js tanpa paket tambahan. Data disimpan di Supabase PostgreSQL.
 
